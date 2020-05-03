@@ -5,16 +5,26 @@ import {
   race,
   throwError,
   of,
+  from,
 } from "rxjs";
-import { mergeMap, first } from "rxjs/operators";
+import { mergeMap, concatMap, first, take, switchMap } from "rxjs/operators";
 import { IDBBrokenError } from "./adapter.exceptions";
-import { IObjectStoresV1 } from "./adapter.interfaces";
+import {
+  IObjectStoresV1,
+  IStoreSchema,
+  CollectionNames,
+  IDocument,
+  TDoc,
+  DocumentID,
+  TColl,
+} from "./adapter.interfaces";
+import { MutationBatch } from "../mutations/mutation.interfaces";
 
 export class Adapter {
   /**
    * `indexedDB` database connection, wrapped in a RxJS `ReplaySubject`
    *
-   */ readonly #conn_ = new ReplaySubject<IDBDatabase>(1);
+   */ readonly #conn$ = new ReplaySubject<IDBDatabase>(1);
 
   constructor() {
     this._initialize();
@@ -29,7 +39,7 @@ export class Adapter {
     try {
       request = indexedDB.open("LikelyMindsLM", 1);
     } catch (error) {
-      this.#conn_.error(new IDBBrokenError(error));
+      this.#conn$.error(new IDBBrokenError(error));
       return;
     }
 
@@ -52,10 +62,10 @@ export class Adapter {
           /**
            *  Register the database connection
            *
-           */ this.#conn_.next(request.result);
+           */ this.#conn$.next(request.result);
         },
         error: (error) => {
-          this.#conn_.error(new IDBBrokenError(error));
+          this.#conn$.error(new IDBBrokenError(error));
         },
       });
   }
@@ -82,8 +92,9 @@ export class Adapter {
           ): IDBObjectStore => {
             if (!db.objectStoreNames.contains(storeName)) {
               return db.createObjectStore(storeName, params);
+            } else {
+              return tx.objectStore(storeName);
             }
-            return tx.objectStore(storeName);
           };
 
           /**
@@ -144,7 +155,7 @@ export class Adapter {
           });
         },
         error: (error) => {
-          this.#conn_.error(new IDBBrokenError(error));
+          this.#conn$.error(new IDBBrokenError(error));
         },
       });
   }
@@ -165,13 +176,13 @@ export class Adapter {
      * Internally, the transaction will run in parallel only if mode is `readonly`.
      * Transaction scopes with `readwrite` mode will be run sequentially and enqueued by the browser agent
      *
-     */ return this.#conn_.pipe(
+     */ return this.#conn$.pipe(
       mergeMap((database) => {
         let transaction: IDBTransaction;
 
         try {
           transaction = database.transaction(
-            ["clientInfo,remote,local,intercom"],
+            ["clientInfo", "remote", "local", "intercom"],
             mode
           );
         } catch (error) {
@@ -192,6 +203,77 @@ export class Adapter {
         return of({ store: objectStores, events });
       })
     );
+  }
+
+  /**
+   * @param docIDs Document IDs to read (inside of the transaction), before performing the write operations.
+   * @param callback a callback function that will be called with the results from the documents read
+   *
+   */ _executeMutationBatch<storeSchema extends IStoreSchema>(
+    docIDs: DocumentID[] | null,
+    callback: (
+      documentsRead: TColl<storeSchema, CollectionNames<storeSchema>>
+    ) => MutationBatch<storeSchema, CollectionNames<storeSchema>>
+  ) {
+    this._transaction$("readwrite")
+      .pipe(
+        mergeMap(({ store, events }) => {
+          /**
+           * Do `read` operations first
+           */
+
+          docIDs;
+
+          const req = store.localCache.getAll();
+          const success$ = fromEvent(req, "success");
+          const error$ = this._listenToError$(req);
+
+          return race([success$, error$, events]).pipe(
+            switchMap((readEvent) => {
+              /**
+               * use callback to send the `documentsRead` back to the caller
+               * the callback then returns the `mutationBatch`
+               * now, we can do all the `write` operations
+               *
+               */
+              const mutationBatch = callback(readEvent.target as any).sort(
+                (a, b) => a.opID - b.opID
+              );
+              return from(mutationBatch).pipe(
+                concatMap((mutationAction) => {
+                  let array = new Uint32Array(10);
+
+                  let doc: IDocument<
+                    storeSchema,
+                    CollectionNames<storeSchema>
+                  > = {
+                    _id: null,
+                    _meta: {
+                      id: crypto.getRandomValues(array).toString(),
+                      createdAt: 1,
+                      lastUpdatedAt: 1,
+                      collectionName: mutationAction.collectionName,
+                    },
+                    doc: mutationAction.doc,
+                  };
+
+                  const request = store.localCache.add(doc);
+
+                  const success$ = fromEvent(request, "success");
+
+                  const error$ = this._listenToError$(request);
+
+                  return race([success$, error$]).pipe(first());
+                }),
+                take(mutationBatch.length)
+              );
+            })
+          );
+        })
+      )
+      .subscribe(undefined, undefined, () => {
+        console.log("Completed");
+      });
   }
 
   /**
@@ -231,5 +313,9 @@ export class Adapter {
     const complete$ = fromEvent(transaction, "complete");
     const error$ = this._listenToError$(transaction);
     return race([complete$, error$]);
+  }
+
+  get _conn$() {
+    return this.#conn$;
   }
 }
