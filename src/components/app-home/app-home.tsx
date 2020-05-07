@@ -1,17 +1,29 @@
 import { Component, h } from "@stencil/core";
 import { Store } from "../../lib";
-import { IStoreSchema } from "../../lib/adapter/adapter.interfaces";
+import { IStoreSchema, IDocument } from "../../lib/interfaces";
+import { race } from "rxjs";
+import { mergeMap, map } from "rxjs/operators";
 
-interface IUsers {
-  uid: string;
+// First, we declare our models
+
+interface IUser extends IDocument<mySchema, "users"> {
+  userName: string;
 }
 
-interface IAbusers {
-  aid: string;
+interface IAbuser extends IDocument<mySchema, "abusers"> {
+  abuserName: string;
+  _meta: {
+    collectionName: "abusers";
+    createdAt: number;
+    lastUpdatedAt: number;
+  };
 }
+
+// Second, we declare our schema based on our models
+
 interface mySchema extends IStoreSchema {
-  users: IUsers;
-  abusers: IAbusers;
+  users: IUser;
+  abusers: IAbuser;
 }
 
 @Component({
@@ -21,25 +33,18 @@ interface mySchema extends IStoreSchema {
 export class AppHome {
   constructor() {
     const store = new Store<mySchema>();
-    /**
-     * @todo fix typing on return type of docsRead
-     * It should not be `IDocument<IUsers | IAbusers>[]`, but be `IDocument<IUsers>[] | IDocument<IAbusers>[]`
-     */
-    store.batchedMutations().execute([], (op, docsRead) => {
-      console.log(docsRead);
-      for (let i = 0; i < 5; i++) {
-        op.add(store.generateDocumentID(), "abusers", {
-          aid: "123",
-        });
-      }
 
-      /*
-      
-      op.add(store.generateDocumentID(), "abusers", {
-        aid: "345",
-      });
-      */
-    });
+    store
+      .initializeBatchedOp("readwrite")
+      .pipe(
+        mergeMap((op) => {
+          op.add("id123", { name: "Rick" });
+          op.add("id243", { name: "John" });
+
+          return op.execute();
+        })
+      )
+      .subscribe();
   }
   render() {
     return [

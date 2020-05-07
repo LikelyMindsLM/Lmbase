@@ -1,19 +1,18 @@
 import ObjectID from "bson-objectid";
 import { Adapter } from "./adapter/adapter";
-import { IStoreSchema, CollectionNames } from "./adapter/adapter.interfaces";
+import { IStoreSchema, CollectionNames, DocumentID } from "./interfaces";
+
+import { of } from "rxjs";
+import { mergeMap } from "rxjs/operators";
 import { BatchedMutation } from "./mutations/mutations";
 
 /**
  * @todo test if having multiple instances of `Store` using `new Store()` from multiple files in the client app is an issue
  *
- * @template storeSchema An interface that extends `IStoreSchema`
- *
  */ export class Store<storeSchema extends IStoreSchema> {
-  readonly #adapter: Adapter;
+  private readonly __adapter: Adapter = new Adapter();
 
-  constructor() {
-    this.#adapter = new Adapter();
-  }
+  constructor() {}
 
   /**
    *
@@ -27,15 +26,20 @@ import { BatchedMutation } from "./mutations/mutations";
     collectionName;
   }
 
-  batchedMutations(): BatchedMutation<storeSchema> {
-    return new BatchedMutation<storeSchema>(this);
+  initializeBatchedOp(mode: IDBTransactionMode) {
+    return this.__adapter._transaction$(mode).pipe(
+      mergeMap((tx) => {
+        return of(new BatchedMutation<storeSchema>(this, tx));
+      })
+    );
   }
 
-  generateDocumentID() {
-    return new ObjectID();
+  generateDocumentID(): DocumentID {
+    return new ObjectID().str;
   }
 
   get _adapter(): Adapter {
-    return this.#adapter;
+    console.log(this.__adapter);
+    return this.__adapter;
   }
 }

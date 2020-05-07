@@ -1,8 +1,8 @@
 {
-  "name": "likelyminds",
+  "name": "@likelymindslm/lmbase",
   "private": true,
   "version": "0.0.1",
-  "description": "likelyminds",
+  "description": "Lmbase Client SDK",
   "license": "MIT",
   "files": [
     "dist/"

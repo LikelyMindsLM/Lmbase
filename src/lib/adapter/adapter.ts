@@ -5,20 +5,11 @@ import {
   race,
   throwError,
   of,
-  from,
 } from "rxjs";
-import { mergeMap, concatMap, first, take, switchMap } from "rxjs/operators";
+
+import { mergeMap, first } from "rxjs/operators";
 import { IDBBrokenError } from "./adapter.exceptions";
-import {
-  IObjectStoresV1,
-  IStoreSchema,
-  CollectionNames,
-  IDocument,
-  TDoc,
-  DocumentID,
-  TColl,
-} from "./adapter.interfaces";
-import { MutationBatch } from "../mutations/mutation.interfaces";
+import { IObjectStoresV1 } from "./adapter.interfaces";
 
 export class Adapter {
   /**
@@ -120,9 +111,14 @@ export class Adapter {
             keyPath: "clientID",
           });
 
-          const remoteCache = _createStore(db, "remote", {
+          /**
+           * Docs in remote cache come from the server
+           * Server sends relevant documents to client after connection
+           * Any local changes made to the remote doc will move that doc from remote to the local cache
+           *
+           */ const remoteCache = _createStore(db, "remote", {
             autoIncrement: false,
-            keyPath: "_meta.id",
+            keyPath: "_id",
           });
           _createIndex(
             remoteCache,
@@ -131,9 +127,17 @@ export class Adapter {
             { multiEntry: false, unique: false }
           );
 
-          const localCache = _createStore(db, "local", {
+          /**
+           * Clientside CRUD operations occur in batches, and they are preserved in the  LocalCache objectstore.
+           * Each batch is treated as an atomic unit, All operations in a batch are executed atomically in the same database transaction
+           *
+           * LocalCache does not keep document revisions for simplicity, hence only the last (final) mutation is recorded
+           * and it overwrites the previous mutations, when there are multiple mutations on the same document. Hence, its importaint to merge changes
+           * when doing upserts so that the last revision which is stored contains the merged changes from all the mutations before it.
+           *
+           */ const localCache = _createStore(db, "local", {
             autoIncrement: false,
-            keyPath: "_meta.id",
+            keyPath: "_id",
           });
           _createIndex(
             localCache,
@@ -206,77 +210,6 @@ export class Adapter {
   }
 
   /**
-   * @param docIDs Document IDs to read (inside of the transaction), before performing the write operations.
-   * @param callback a callback function that will be called with the results from the documents read
-   *
-   */ _executeMutationBatch<storeSchema extends IStoreSchema>(
-    docIDs: DocumentID[] | null,
-    callback: (
-      documentsRead: TColl<storeSchema, CollectionNames<storeSchema>>
-    ) => MutationBatch<storeSchema, CollectionNames<storeSchema>>
-  ) {
-    this._transaction$("readwrite")
-      .pipe(
-        mergeMap(({ store, events }) => {
-          /**
-           * Do `read` operations first
-           */
-
-          docIDs;
-
-          const req = store.localCache.getAll();
-          const success$ = fromEvent(req, "success");
-          const error$ = this._listenToError$(req);
-
-          return race([success$, error$, events]).pipe(
-            switchMap((readEvent) => {
-              /**
-               * use callback to send the `documentsRead` back to the caller
-               * the callback then returns the `mutationBatch`
-               * now, we can do all the `write` operations
-               *
-               */
-              const mutationBatch = callback(readEvent.target as any).sort(
-                (a, b) => a.opID - b.opID
-              );
-              return from(mutationBatch).pipe(
-                concatMap((mutationAction) => {
-                  let array = new Uint32Array(10);
-
-                  let doc: IDocument<
-                    storeSchema,
-                    CollectionNames<storeSchema>
-                  > = {
-                    _id: null,
-                    _meta: {
-                      id: crypto.getRandomValues(array).toString(),
-                      createdAt: 1,
-                      lastUpdatedAt: 1,
-                      collectionName: mutationAction.collectionName,
-                    },
-                    doc: mutationAction.doc,
-                  };
-
-                  const request = store.localCache.add(doc);
-
-                  const success$ = fromEvent(request, "success");
-
-                  const error$ = this._listenToError$(request);
-
-                  return race([success$, error$]).pipe(first());
-                }),
-                take(mutationBatch.length)
-              );
-            })
-          );
-        })
-      )
-      .subscribe(undefined, undefined, () => {
-        console.log("Completed");
-      });
-  }
-
-  /**
    * Listen to errors on a transaction or request, and throw in RxJS style
    * so that error notifications are sent to subscribers,
    * or so that the error can be caught by `catchError` operator
@@ -286,7 +219,7 @@ export class Adapter {
    * It will never emit any value, only emits error notification
    *
    *
-   */ private _listenToError$(
+   */ _listenToError$(
     transactionOrRequest: IDBTransaction | IDBRequest
   ): Observable<never> {
     return fromEvent(transactionOrRequest, "error").pipe(

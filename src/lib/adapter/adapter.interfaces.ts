@@ -1,104 +1,25 @@
 import type { MutationType } from "../mutations/mutation.interfaces";
-import ObjectID from "bson-objectid";
+import {
+  IStoreSchema,
+  CollectionNames,
+  TDoc,
+  DocumentID,
+  DateTimeMs,
+  arrayOfCollectionNames,
+  IDocument,
+} from "../interfaces";
 
-export type DocumentID = string; // ObjectID.str
 export type BatchID = number;
 export type ClientID = string; // UUID V2
-export type DateTimeMs = number; // Epoch Milliseconds
-
-/**
- * Schema that defines the interface of all documents in the store.
- * The `Store` is fully typed.
- * The client app needs to extend  `IStoreSchema` and provide that to the `Store` for the typings to work correctly
- *
- * `key` is the collection name, `value` is the interface of a document which belongs to that collection
- *
- */ export interface IStoreSchema {
-  [collectionName: string]: unknown;
-}
-
-/**
- * Extracts the keys from an interface `T` which describes an indexable type.
- *
- * @template T The interface from which we are extracting the keys.
- * `T` looks like the example below:
- * @example
- * ```
- * interface T {
- * [key: string]: unknown;
- * }
- * ```
- *
- * @note A simple `keyOf` wouldnt work here since the interface `T` defines an index signature `[key: string]: someType` instead of
- * defining pre-known keys. We need to `infer` since the keys come from the client app
- *
- *
- */ export type ExtractKeysFrom<T> = {
-  [K in keyof T]: string extends K ? never : number extends K ? never : K;
-} extends { [_ in keyof T]: infer U }
-  ? U
-  : never;
-
-/**
- * Extract names of the collections from IStoreSchema
- *
- * @template storeSchema An interface that extends IStoreSchema
- *
- */ export type CollectionNames<
-  storeSchema extends IStoreSchema
-> = storeSchema extends IStoreSchema ? ExtractKeysFrom<storeSchema> : string;
-
-/**
- * Typings for an array of strings where the string entries are collection names
- * @example
- * ```
- * const myCollectionNames = ["users","posts","details"] // where collectionNames can be "users"|"posts"|"details"
- * ```
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export type arrayOfCollectionNames<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> = [collectionNames] extends [CollectionNames<storeSchema>]
-  ? Array<collectionNames>
-  : never;
-
-/**
- * IStoreSchema defines the shape of the store as follows:
- * `key` is the collection name, `value` is the interface of a document which belongs to that collection
- *
- * Here, we extract the `value` portion from `IStoreSchema`
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export type TDoc<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> = storeSchema extends IStoreSchema ? storeSchema[collectionNames] : unknown;
-
-/**
- * Typing for arrays of TDoc
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export type TColl<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>,
-  T = TDoc<storeSchema, collectionNames>
-> = T extends TDoc<storeSchema, collectionNames> ? T[] : unknown[];
 
 /**
  * V1 `indexeddb` object-stores created by the adapter
  *
  */ export interface IObjectStoresV1 {
-  clientInfo: IDBObjectStore;
-  remoteCache: IDBObjectStore;
-  localCache: IDBObjectStore;
-  intercom: IDBObjectStore;
+  clientInfo: IDBObjectStore /** IClientMetadata */;
+  remoteCache: IDBObjectStore /** TDoc */;
+  localCache: IDBObjectStore /** TDoc */;
+  intercom: IDBObjectStore /** Intercom */;
 }
 
 export interface IClientMetadata {
@@ -123,112 +44,16 @@ export interface IClientMetadata {
 }
 
 /**
- * A document in the store
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export interface IDocument<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> {
-  /**
-   * @param _id BSON ObjectID used by MongoDB as primary key
-   * @example
-   * ```
-   * import { generateDocumentID } from "../../lib";
-   * const _id:DocumentID = generateDocumentID()
-   * ```
-   *
-   */ _id: ObjectID;
-
-  /**
-   * @param doc Contains the document fields
-   *
-   */ doc: TDoc<storeSchema, collectionNames>;
-
-  /**
-   * @param _meta Contains additional metadata populated by the library on every CRUD
-   *
-   */ _meta: IDocumentMetadata<storeSchema, collectionNames>;
-}
-
-/**
- * Additional metadata populated during every CRUD
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export interface IDocumentMetadata<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> {
-  /**
-   * @param id `ObjectID` in a string format
-   * @example
-   * ```
-   * import { generateDocumentID } from "../../lib";
-   * const _id:ObjectID = generateDocumentID();
-   * const id:DocumentID = _id.str;
-   * ```
-   *
-   */ id: DocumentID;
-
-  /**
-   * @param collectionName The collection this document belongs to
-   *
-   */ collectionName: collectionNames;
-
-  createdAt: DateTimeMs;
-  lastUpdatedAt: DateTimeMs;
-}
-
-/**
- * Docs in remote cache come from the server
- * Server sends relevant documents to client after connection
- * Any local changes made to the remote doc will move that doc from remote to the local cache
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export type RemoteCache<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> = IDocument<storeSchema, collectionNames>;
-
-/**
- *
- * Clientside CRUD happens in batches, and each batch is treated as an atomic unit.
- * All docs in the batch are created atomically in the same database transaction
- *
- * LocalCache does not keep document revisions for simplicity, hence only the last (final) mutation is recorded
- * and it overwrites the previous mutations, when there are multiple mutations on the same document. Hence, its importaint to merge changes
- * when doing upserts so that the last revision which is stored contains the merged changes from all the mutations before it.
- *
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
- */ export type LocalCache<
-  storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
-> = IDocument<storeSchema, collectionNames>;
-
-/**
  * A mutation batch needs to be broadcasted to all connected browser tabs
  * The batch is stored temporarily in the intercom and changestream is created using the info
  *
- * @template storeSchema An interface that extends IStoreSchema
- */
-
-export interface Intercom<
+ */ export interface Intercom<
   storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
+  collectionNames extends CollectionNames<storeSchema>,
+  doc extends IDocument<storeSchema, collectionNames>
 > {
   /**
    * @param batchID Auto-incremented indexeddb primary key representing the mutation batch
-   *
-   * @template storeSchema An interface that extends `IStoreSchema`
-   * @template collectionNames An interface that extends `CollectionNames`
    *
    */ batchID: BatchID;
 
@@ -247,29 +72,28 @@ export interface Intercom<
   /**
    * @param mutations Documents in this mutation batch
    *
-   */ mutations: IMutationRecord<storeSchema, collectionNames>[];
+   */ mutations: IMutationRecord<storeSchema, collectionNames, doc>[];
 }
 
 /**
- * @template storeSchema An interface that extends `IStoreSchema`
- * @template collectionNames An interface that extends `CollectionNames`
- *
+ * Defines the shape of a mutation record in the mutation batch
  *
  */ export interface IMutationRecord<
   storeSchema extends IStoreSchema,
-  collectionNames extends CollectionNames<storeSchema>
+  collectionNames extends CollectionNames<storeSchema>,
+  doc extends IDocument<storeSchema, collectionNames>
 > {
   type: MutationType;
   docID: DocumentID;
-  collectionName: CollectionNames<storeSchema>;
+  collectionName: collectionNames;
 
   /**
    * @param doc State of document after the mutation, or null if deleted
    *
-   */ doc: IDocument<storeSchema, collectionNames> | null;
+   */ doc: TDoc<storeSchema, collectionNames, doc> | null;
 
   /**
    * @param oldDoc State of document before the mutation
    *
-   */ oldDoc: IDocument<storeSchema, collectionNames>;
+   */ oldDoc: TDoc<storeSchema, collectionNames, doc>;
 }
