@@ -9,6 +9,8 @@ import {
   IDocument,
 } from "../interfaces";
 
+import { Observable } from "rxjs";
+
 export type BatchID = number;
 export type ClientID = string; // UUID V2
 
@@ -96,4 +98,12 @@ export interface IClientMetadata {
    * @param oldDoc State of document before the mutation
    *
    */ oldDoc: TDoc<storeSchema, collectionNames, doc>;
+}
+
+/**
+ * Represents a transaction
+ *
+ */ export interface LMTX {
+  store: IObjectStoresV1;
+  events$: Observable<Event>;
 }

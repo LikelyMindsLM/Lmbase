@@ -9,7 +9,7 @@ import {
 
 import { mergeMap, first } from "rxjs/operators";
 import { IDBBrokenError } from "./adapter.exceptions";
-import { IObjectStoresV1 } from "./adapter.interfaces";
+import { IObjectStoresV1, LMTX } from "./adapter.interfaces";
 
 export class Adapter {
   /**
@@ -169,16 +169,17 @@ export class Adapter {
    * @param mode `readonly` or `readwrite`
    * @returns An `indexedDB` transaction store and events, wrapped in an RxJS `Observable`
    */
-  _transaction$(
-    mode: IDBTransactionMode
-  ): Observable<{
-    store: IObjectStoresV1;
-    events: Observable<Event>;
-  }> {
+  _transaction$(mode: IDBTransactionMode): Observable<LMTX> {
     /**
      * Mergemap behavior is required here since we want parallel transaction objects.
      * Internally, the transaction will run in parallel only if mode is `readonly`.
      * Transaction scopes with `readwrite` mode will be run sequentially and enqueued by the browser agent
+     *
+     * Note that we are directly tapping into the `#conn$` stream, which is a `ReplaySubject` so it will
+     * never end. Directly using a pipe() from `_transaction$()` will therefore create new transactions per operation
+     * instead of doing those operations all in one transaction. For `BatchedMutation` we need to only listen to this stream
+     * once, and then extract the transaction from it, and complete the stream and pass that transaction to the `BatchedMutation` class
+     * so that we dont create multiple transactions.
      *
      */ return this.#conn$.pipe(
       mergeMap((database) => {
@@ -202,9 +203,9 @@ export class Adapter {
         };
 
         /* Listen transaction `complete` and `error` events */
-        const events = this._listenToTransactionEvents$(transaction);
+        const events$ = this._listenToTransactionEvents$(transaction);
 
-        return of({ store: objectStores, events });
+        return of({ store: objectStores, events$ });
       })
     );
   }

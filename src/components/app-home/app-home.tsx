@@ -1,8 +1,6 @@
 import { Component, h } from "@stencil/core";
 import { Store } from "../../lib";
 import { IStoreSchema, IDocument } from "../../lib/interfaces";
-import { race } from "rxjs";
-import { mergeMap, map } from "rxjs/operators";
 
 // First, we declare our models
 
@@ -31,21 +29,17 @@ interface mySchema extends IStoreSchema {
   styleUrl: "app-home.css",
 })
 export class AppHome {
-  constructor() {
+  async componentDidLoad() {
     const store = new Store<mySchema>();
-
-    store
-      .initializeBatchedOp("readwrite")
-      .pipe(
-        mergeMap((op) => {
-          op.add("id123", { name: "Rick" });
-          op.add("id243", { name: "John" });
-
-          return op.execute();
-        })
-      )
-      .subscribe();
+    store.createBatchedMutation("readwrite", async (op) => {
+      const rick = (await op.get("1")).target["result"];
+      console.log(rick);
+      op.add("1", { name: "Rick" });
+      op.add("2", { name: "Sally" });
+      op.executeBatch();
+    });
   }
+
   render() {
     return [
       <ion-header>
